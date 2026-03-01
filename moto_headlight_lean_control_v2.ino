@@ -75,7 +75,7 @@
 #define LED9_PIN            17    // D7
 #define LED10_PIN           19    // D8
 #define DS18B20_PIN         21    // D3
-#define FAN_PWM_PIN         18    // D10
+#define FAN_PWM_PIN         20    // D9
 #define VOLTAGE_ADC_PIN     0     // D0
 
 // ============================================================================
@@ -88,6 +88,29 @@
 
 #define LEFT_SENSOR_CH      0
 #define RIGHT_SENSOR_CH     1
+#define IMU_CH              2     // TCA9548A channel for ICM-42688-P
+
+// ============================================================================
+// ICM-42688-P REGISTERS
+// ============================================================================
+#define ICM_ADDR            0x68  // AD0 low; use 0x69 if AD0 high
+#define ICM_DEVICE_CONFIG   0x11
+#define ICM_PWR_MGMT0       0x4E
+#define ICM_GYRO_CONFIG0    0x4F
+#define ICM_GYRO_DATA_X1    0x25  // High byte of X
+#define ICM_WHO_AM_I        0x75
+#define ICM_WHO_AM_I_VAL    0x47
+
+// Yaw axis selection - whichever gyro axis points vertically up when bike is upright
+// With PCB vertical and facing forward: change to GYRO_Y or GYRO_X if needed
+#define YAW_AXIS            GYRO_Z  // Adjust after bench test
+
+// ============================================================================
+// SPEED SENSOR
+// ============================================================================
+#define SPEED_PIN           18    // D10 - interrupt-capable
+#define SPEED_PULSES_PER_REV  4   // Pulses per wheel rotation - verify for your bike
+#define WHEEL_CIRCUMFERENCE_M 1.95 // Meters - measure or look up for your tire size
 
 // ============================================================================
 // DFROBOT SENSOR REGISTERS
@@ -141,7 +164,7 @@
 #define DEFAULT_DIM_START_TEMP  70.0   // deg C: begin dimming LDD
 #define DEFAULT_DIM_MAX_TEMP    85.0   // deg C: LDD at 0%
 
-#define DEFAULT_MAX_CURRENT     1.1    // Amps: INA219 overcurrent threshold
+#define DEFAULT_MAX_CURRENT     1.32   // Amps: INA219 overcurrent threshold (1.2A + 10% margin)
 
 // ============================================================================
 // CONFIG STRUCT
@@ -163,6 +186,17 @@ struct Config {
 
   float leftSensorOffset;
   float rightSensorOffset;
+
+  // IMU
+  bool useIMU;              // Use ICM-42688-P for lean angle
+  bool useDistanceSensors;  // Use distance sensors (can run both for comparison)
+  int  imuYawAxis;          // 0=X, 1=Y, 2=Z
+  bool imuYawInvert;        // Invert yaw sign if needed
+  float imuGyroScale;       // Degrees/s per LSB (set by gyro range)
+
+  // Speed sensor
+  uint16_t pulsesPerRev;    // Pulses per wheel revolution
+  float wheelCircumference; // Meters
 
   float fanOnTemp;
   float fanFullTemp;
@@ -190,6 +224,17 @@ Config config = {
   0.0,
   0.0,
 
+  // IMU defaults
+  true,     // useIMU
+  true,     // useDistanceSensors
+  2,        // imuYawAxis: Z (change to 0=X or 1=Y after bench test)
+  false,    // imuYawInvert
+  0.0,      // gyroScale (set during init based on range)
+
+  // Speed sensor defaults
+  4,        // pulsesPerRev
+  1.95,     // wheelCircumference (meters)
+
   DEFAULT_FAN_ON_TEMP,
   DEFAULT_FAN_FULL_TEMP,
   DEFAULT_DIM_START_TEMP,
@@ -207,7 +252,16 @@ struct SystemState {
   uint16_t rightDistance;
   bool leftValid;
   bool rightValid;
-  float leanAngle;
+  float leanAngle;          // Final lean angle used for LED control
+  float leanAngleDist;      // Lean from distance sensors
+  float leanAngleIMU;       // Lean from IMU+speed
+
+  // IMU
+  float yawRate;            // deg/s from gyro
+  float speedMs;            // m/s from wheel speed sensor
+  float gyroZeroBias;       // Calibrated zero offset
+  bool imuInitialized;
+  bool imuCalibrated;
 
   // LEDs (true = illuminated)
   bool ledState[10];
@@ -246,6 +300,139 @@ DallasTemperature tempSensor(&oneWire);
 unsigned long lastSampleTime = 0;
 unsigned long lastTempTime = 0;
 unsigned long lastCurrentTime = 0;
+
+// ============================================================================
+// SPEED SENSOR (interrupt-based pulse counting)
+// ============================================================================
+volatile uint32_t speedPulseCount = 0;
+volatile unsigned long lastPulseTime = 0;
+unsigned long lastSpeedCalcTime = 0;
+uint32_t lastPulseSnapshot = 0;
+
+void IRAM_ATTR speedPulseISR() {
+  speedPulseCount++;
+  lastPulseTime = micros();
+}
+
+void initSpeedSensor() {
+  pinMode(SPEED_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(SPEED_PIN), speedPulseISR, RISING);
+  Serial.println("Speed sensor ISR attached");
+}
+
+void updateSpeed() {
+  unsigned long now = millis();
+  unsigned long elapsed = now - lastSpeedCalcTime;
+  if (elapsed < 100) return;
+  uint32_t pulses = speedPulseCount - lastPulseSnapshot;
+  lastPulseSnapshot = speedPulseCount;
+  lastSpeedCalcTime = now;
+  float revs = (float)pulses / config.pulsesPerRev;
+  state.speedMs = revs * config.wheelCircumference / (elapsed / 1000.0f);
+  if ((micros() - lastPulseTime) > 500000UL) state.speedMs = 0.0f;
+}
+
+// ============================================================================
+// ICM-42688-P IMU
+// ============================================================================
+uint8_t icmRead(uint8_t reg) {
+  tcaSelect(IMU_CH);
+  Wire.beginTransmission(ICM_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  Wire.requestFrom((uint8_t)ICM_ADDR, (uint8_t)1);
+  return Wire.available() ? Wire.read() : 0;
+}
+
+void icmWrite(uint8_t reg, uint8_t val) {
+  tcaSelect(IMU_CH);
+  Wire.beginTransmission(ICM_ADDR);
+  Wire.write(reg);
+  Wire.write(val);
+  Wire.endTransmission();
+}
+
+float readRawYawRate() {
+  tcaSelect(IMU_CH);
+  Wire.beginTransmission(ICM_ADDR);
+  Wire.write(ICM_GYRO_DATA_X1);
+  Wire.endTransmission(false);
+  Wire.requestFrom((uint8_t)ICM_ADDR, (uint8_t)6);
+  if (Wire.available() < 6) return 0.0f;
+  int16_t gx = (Wire.read() << 8) | Wire.read();
+  int16_t gy = (Wire.read() << 8) | Wire.read();
+  int16_t gz = (Wire.read() << 8) | Wire.read();
+  int16_t raw = 0;
+  switch (config.imuYawAxis) {
+    case 0: raw = gx; break;
+    case 1: raw = gy; break;
+    case 2: raw = gz; break;
+  }
+  if (config.imuYawInvert) raw = -raw;
+  return raw / config.imuGyroScale;
+}
+
+bool initIMU() {
+  uint8_t whoami = icmRead(ICM_WHO_AM_I);
+  if (whoami != ICM_WHO_AM_I_VAL) {
+    Serial.printf("ICM-42688-P not found (WHO_AM_I=0x%02X)\n", whoami);
+    state.imuInitialized = false;
+    return false;
+  }
+  icmWrite(ICM_DEVICE_CONFIG, 0x01);  // Soft reset
+  delay(10);
+  icmWrite(ICM_PWR_MGMT0, 0x0C);      // Gyro low noise mode
+  delay(1);
+  icmWrite(ICM_GYRO_CONFIG0, 0x66);   // ±250dps, 1kHz ODR
+  delay(1);
+  config.imuGyroScale = 131.072f;     // LSB / (deg/s) for ±250dps
+  state.imuInitialized = true;
+  Serial.println("ICM-42688-P initialized");
+  return true;
+}
+
+void calibrateGyroBias(int samples = 200) {
+  if (!state.imuInitialized) return;
+  Serial.println("Calibrating gyro bias - keep bike still...");
+  float sum = 0;
+  for (int i = 0; i < samples; i++) {
+    sum += readRawYawRate();
+    delay(5);
+  }
+  state.gyroZeroBias = sum / samples;
+  state.imuCalibrated = true;
+  Serial.printf("Gyro bias: %.4f deg/s\n", state.gyroZeroBias);
+}
+
+void updateIMULean() {
+  if (!state.imuInitialized || !state.imuCalibrated) return;
+  state.yawRate = readRawYawRate() - state.gyroZeroBias;
+  if (state.speedMs < 2.0f) { state.leanAngleIMU = 0.0f; return; }
+  float omegaRad = state.yawRate * (M_PI / 180.0f);
+  float leanRad  = atanf(state.speedMs * omegaRad / 9.81f);
+  state.leanAngleIMU = leanRad * (180.0f / M_PI);
+}
+
+// ============================================================================
+// LEAN ANGLE FUSION
+// ============================================================================
+void updateLeanAngle() {
+  bool distValid = state.leftValid && state.rightValid;
+  if (config.useIMU && config.useDistanceSensors) {
+    if (distValid && state.speedMs >= 2.0f)
+      state.leanAngle = 0.3f * state.leanAngleDist + 0.7f * state.leanAngleIMU;
+    else if (distValid)
+      state.leanAngle = state.leanAngleDist;
+    else if (state.speedMs >= 2.0f)
+      state.leanAngle = state.leanAngleIMU;
+    else
+      state.leanAngle = 0.0f;
+  } else if (config.useIMU) {
+    state.leanAngle = state.leanAngleIMU;
+  } else {
+    state.leanAngle = distValid ? state.leanAngleDist : 0.0f;
+  }
+}
 
 // ============================================================================
 // TCA9548A MULTIPLEXER
@@ -462,46 +649,23 @@ float calculateLeanAngle(uint16_t leftDist, uint16_t rightDist) {
 //
 // Mirror for right: LED6,7,8,9,10
 
+// Left LED indices in activation order: LED5=4, LED4=3, LED3=2, LED2=1, LED1=0
+// Right LED indices in activation order: LED6=5, LED7=6, LED8=7, LED9=8, LED10=9
+
 void computeLEDStates(float leanAngle) {
   bool newState[10] = {false};
 
-  auto activateSide = [&](bool isLeft) {
-    // LED indices: left = 4,3,2,1,0 (LED5..LED1), right = 5,6,7,8,9 (LED6..LED10)
-    int ledOrder[5];
-    if (isLeft) {
-      ledOrder[0] = 4; ledOrder[1] = 3; ledOrder[2] = 2; ledOrder[3] = 1; ledOrder[4] = 0;
-    } else {
-      ledOrder[0] = 5; ledOrder[1] = 6; ledOrder[2] = 7; ledOrder[3] = 8; ledOrder[4] = 9;
-    }
-
-    float absAngle = fabsf(leanAngle);
-
-    // Determine how many thresholds are exceeded
-    int exceeded = 0;
-    for (int i = 0; i < 5; i++) {
-      if (absAngle >= config.ledThresholds[i]) exceeded = i + 1;
-      else break;
-    }
-
-    // Max 3 LEDs on; once exceeded >= 4, oldest start turning off
-    // Active window of 3 slides along ledOrder as exceeded increases
-    if (exceeded == 0) return;
-
-    int startIdx = (exceeded > 3) ? (exceeded - 3) : 0;
-    int endIdx   = min(exceeded, 5) - 1;
-
-    for (int i = startIdx; i <= endIdx; i++) {
-      newState[ledOrder[i]] = true;
-    }
-  };
+  static bool wasLeft  = false;
+  static bool wasRight = false;
+  // Per-threshold hysteresis state for each side
+  static bool leftThreshActive[5]  = {false};
+  static bool rightThreshActive[5] = {false};
 
   float onAngle  = config.ledThresholds[0];
   float offAngle = onAngle - config.hysteresis;
+  float absAngle = fabsf(leanAngle);
 
-  // Determine active direction with hysteresis
-  static bool wasLeft  = false;
-  static bool wasRight = false;
-
+  // Determine overall direction using threshold[0] hysteresis
   if (leanAngle >= onAngle) {
     wasLeft  = true;
     wasRight = false;
@@ -509,16 +673,49 @@ void computeLEDStates(float leanAngle) {
     wasRight = true;
     wasLeft  = false;
   } else if (leanAngle > -offAngle && leanAngle < offAngle) {
-    // Within deadband - turn everything off
     wasLeft  = false;
     wasRight = false;
+  } else if (leanAngle >= offAngle && leanAngle < onAngle) {
+    wasRight = false;
+  } else if (leanAngle <= -offAngle && leanAngle > -onAngle) {
+    wasLeft  = false;
   }
-  // Between offAngle and onAngle: maintain previous state (hysteresis)
 
-  if (wasLeft)  activateSide(true);
-  if (wasRight) activateSide(false);
+  // Clear per-threshold states when direction turns off
+  if (!wasLeft)  for (int i = 0; i < 5; i++) leftThreshActive[i]  = false;
+  if (!wasRight) for (int i = 0; i < 5; i++) rightThreshActive[i] = false;
 
-  // Apply new states
+  // Per-threshold hysteresis: each threshold independently on/off
+  if (wasLeft || wasRight) {
+    bool* threshActive = wasLeft ? leftThreshActive : rightThreshActive;
+    for (int i = 0; i < 5; i++) {
+      float on  = config.ledThresholds[i];
+      float off = on - config.hysteresis;
+      if (absAngle >= on) threshActive[i] = true;
+      if (absAngle <  off) threshActive[i] = false;
+      // Between off and on: hold previous state
+    }
+  }
+
+  // Compute active LED window from contiguous threshold states
+  auto activateFromThresh = [&](bool* threshActive, const int* order) {
+    int exceeded = 0;
+    for (int i = 0; i < 5; i++) {
+      if (threshActive[i]) exceeded = i + 1;
+      else break;
+    }
+    if (exceeded == 0) return;
+    int startIdx = exceeded > 3 ? exceeded - 3 : 0;
+    int endIdx   = exceeded - 1;
+    for (int i = startIdx; i <= endIdx; i++) newState[order[i]] = true;
+  };
+
+  const int leftOrder[]  = {4, 3, 2, 1, 0};
+  const int rightOrder[] = {5, 6, 7, 8, 9};
+
+  if (wasLeft)  activateFromThresh(leftThreshActive,  leftOrder);
+  if (wasRight) activateFromThresh(rightThreshActive, rightOrder);
+
   for (int i = 0; i < 10; i++) state.ledState[i] = newState[i];
 }
 
@@ -591,6 +788,52 @@ void updateCurrent() {
     uint8_t currentPwm = (uint8_t)(state.lddPwm * overcurrentRatio);
     ledcWrite(LDD_PWM_CHANNEL, currentPwm);
   }
+}
+
+// ============================================================================
+// STARTUP SEQUENCE
+// ============================================================================
+
+void startupSequence() {
+  // Ramp LDD PWM up to 20%
+  ledcWrite(LDD_PWM_CHANNEL, 0);
+  delay(100);
+  for (int pwm = 0; pwm <= 51; pwm++) {
+    ledcWrite(LDD_PWM_CHANNEL, pwm);
+    delay(10);
+  }
+
+  // LED pair order: 5/6, 4/7, 3/8, 2/9, 1/10  (indices 4/5, 3/6, 2/7, 1/8, 0/9)
+  int leftOrder[5]  = {4, 3, 2, 1, 0};
+  int rightOrder[5] = {5, 6, 7, 8, 9};
+
+  // Sweep outward - turn on pairs sequentially
+  for (int i = 0; i < 5; i++) {
+    state.ledState[leftOrder[i]]  = true;
+    state.ledState[rightOrder[i]] = true;
+    applyLEDStates();
+    delay(120);
+  }
+
+  delay(300);
+
+  // Sweep inward - turn off pairs sequentially (5/6 first, then outward)
+  for (int i = 0; i < 5; i++) {
+    state.ledState[leftOrder[i]]  = false;
+    state.ledState[rightOrder[i]] = false;
+    applyLEDStates();
+    delay(120);
+  }
+
+  // Pause with LEDs off, then ramp LDD back to full brightness
+  delay(2000);
+  for (int pwm = 51; pwm <= 255; pwm++) {
+    ledcWrite(LDD_PWM_CHANNEL, pwm);
+    delay(4);
+  }
+
+  state.lddPwm = 255;
+  Serial.println("Startup sequence complete");
 }
 
 // ============================================================================
@@ -1151,8 +1394,16 @@ void setup() {
   initTempSensor();
   state.systemInitialized = initializeSensors();
 
-  if (!state.systemInitialized) {
-    Serial.println("WARNING: Distance sensors failed - LEDs will not activate");
+  // IMU and speed sensor
+  initSpeedSensor();
+  if (config.useIMU) {
+    if (initIMU()) {
+      calibrateGyroBias(200);  // ~1 second, bike must be stationary
+    }
+  }
+
+  if (!state.systemInitialized && !state.imuInitialized) {
+    Serial.println("WARNING: No lean angle source available - LEDs will not activate");
   }
 
   // WiFi and services
@@ -1163,6 +1414,9 @@ void setup() {
   state.uptime = millis();
   Serial.println("System ready!");
   Serial.printf("Access: http://%s.local  or  http://192.168.5.1\n", config.deviceName);
+
+  // Run startup LED sequence
+  startupSequence();
 }
 
 // ============================================================================
@@ -1175,10 +1429,26 @@ void loop() {
 
   unsigned long now = millis();
 
-  // Sensor read + LED update
+  // Speed sensor update (every 100ms)
+  updateSpeed();
+
+  // IMU lean update (every sample interval)
+  if (config.useIMU && state.imuInitialized && state.imuCalibrated) {
+    updateIMULean();
+  }
+
+  // Distance sensor read (every sample interval)
   if (state.systemInitialized && (now - lastSampleTime >= config.sampleInterval)) {
     lastSampleTime = now;
-    readSensors();
+    readSensors();  // updates leanAngleDist
+  }
+
+  // Fuse lean angle sources and drive LEDs
+  if (now - lastSampleTime < config.sampleInterval * 2) {
+    updateLeanAngle();
+    computeLEDStates(state.leanAngle);
+    applyLEDStates();
+    updateVoltage();
   }
 
   // Temperature + fan + LDD dim (every 2 seconds)

@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cornering Light Simulator</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700;900&display=swap');
+
+  :root {
+    --bg: #0a0c10;
+    --panel: #0f1318;
+    --border: #1e2530;
+    --accent: #ff6b00;
+    --accent2: #00d4ff;
+    --led-off: #1a1e26;
+    --led-on: #ffcc00;
+    --led-glow: #ffcc0066;
+    --text: #c8d0dc;
+    --muted: #4a5568;
+    --mono: 'Share Tech Mono', monospace;
+    --sans: 'Barlow Condensed', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 30px 20px;
+    background-image:
+      radial-gradient(ellipse at 20% 0%, #ff6b0010 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 100%, #00d4ff08 0%, transparent 50%);
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+
+  header h1 {
+    font-family: var(--sans);
+    font-weight: 900;
+    font-size: clamp(24px, 5vw, 42px);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #fff;
+  }
+
+  header h1 span { color: var(--accent); }
+
+  header p {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.2em;
+    margin-top: 6px;
+    text-transform: uppercase;
+  }
+
+  .main {
+    width: 100%;
+    max-width: 860px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 24px;
+  }
+
+  .panel-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .panel-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* LED DISPLAY */
+  .led-strip {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    padding: 20px 0;
+  }
+
+  .led-group {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .led-separator {
+    width: 2px;
+    height: 60px;
+    background: var(--border);
+    border-radius: 2px;
+    margin: 0 6px;
+  }
+
+  .led-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .led-num {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+  }
+
+  .led {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--led-off);
+    border: 2px solid #2a3040;
+    position: relative;
+    transition: all 0.08s ease;
+    cursor: default;
+  }
+
+  .led.on {
+    background: var(--led-on);
+    border-color: #e6b800;
+    box-shadow:
+      0 0 8px var(--led-glow),
+      0 0 20px var(--led-glow),
+      0 0 40px #ffcc0033;
+  }
+
+  .led.just-changed {
+    animation: ledPop 0.15s ease;
+  }
+
+  @keyframes ledPop {
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.18); }
+    100% { transform: scale(1); }
+  }
+
+  .led-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+  }
+
+  /* LEAN ANGLE CONTROL */
+  .lean-control {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .lean-display {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .lean-value {
+    font-family: var(--mono);
+    font-size: clamp(48px, 10vw, 72px);
+    font-weight: 400;
+    color: #fff;
+    line-height: 1;
+    min-width: 180px;
+    text-align: right;
+    transition: color 0.2s;
+  }
+
+  .lean-value.left  { color: var(--accent); }
+  .lean-value.right { color: var(--accent2); }
+
+  .lean-unit {
+    font-family: var(--mono);
+    font-size: 18px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .lean-direction {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    min-width: 80px;
+    margin-bottom: 8px;
+    color: var(--muted);
+  }
+
+  .lean-direction.left  { color: var(--accent); }
+  .lean-direction.right { color: var(--accent2); }
+
+  /* Slider */
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .slider-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    color: var(--muted);
+    text-transform: uppercase;
+    width: 36px;
+    text-align: center;
+  }
+
+  input[type=range] {
+    -webkit-appearance: none;
+    flex: 1;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+  }
+
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: 2px solid #fff2;
+    box-shadow: 0 0 8px #ff6b0088;
+    transition: transform 0.1s;
+  }
+
+  input[type=range]::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+  }
+
+  /* Bike SVG lean indicator */
+  .bike-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 120px;
+    position: relative;
+  }
+
+  .bike-svg {
+    transition: transform 0.12s ease;
+  }
+
+  /* Timeline */
+  .timeline-wrap {
+    position: relative;
+  }
+
+  canvas#timeline {
+    width: 100%;
+    height: 180px;
+    border-radius: 2px;
+    display: block;
+  }
+
+  .timeline-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 18px;
+    margin-top: 12px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  /* Config panel */
+  .config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+  }
+
+  .config-item {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .config-item label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .config-item input[type=number] {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: #fff;
+    font-family: var(--mono);
+    font-size: 14px;
+    padding: 7px 10px;
+    width: 100%;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .config-item input[type=number]:focus {
+    border-color: var(--accent);
+  }
+
+  /* Status bar */
+  .status-bar {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .status-chip {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 4px 10px;
+    border-radius: 2px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    letter-spacing: 0.1em;
+  }
+
+  .status-chip.active {
+    border-color: var(--led-on);
+    color: var(--led-on);
+    background: #ffcc0010;
+  }
+
+  .status-chip.left-active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: #ff6b0010;
+  }
+
+  .status-chip.right-active {
+    border-color: var(--accent2);
+    color: var(--accent2);
+    background: #00d4ff10;
+  }
+
+  /* Playback controls */
+  .playback {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  button {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+    font-weight: 700;
+  }
+
+  button.primary:hover {
+    background: #ff8533;
+    border-color: #ff8533;
+  }
+
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+  }
+
+  /* LDD brightness bar */
+  .brightness-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 4px;
+  }
+
+  .brightness-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .brightness-track {
+    flex: 1;
+    height: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .brightness-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #ff6b00, #ffcc00);
+    border-radius: 4px;
+    transition: width 0.05s linear;
+    box-shadow: 0 0 6px #ffcc0066;
+  }
+
+  .brightness-pct {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--led-on);
+    width: 38px;
+    text-align: right;
+  }
+
+  .startup-status {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    text-align: center;
+    min-height: 18px;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Cornering Light <span>Simulator</span></h1>
+  <p>V2 · Samsung LH351D × 10 · ESP32-C6</p>
+</header>
+
+<div class="main">
+
+  <!-- LED DISPLAY -->
+  <div class="panel">
+    <div class="panel-title">LED Array</div>
+    <div class="led-strip">
+      <div class="led-group" id="leftGroup">
+        <!-- LED 1-5 filled by JS, reversed so LED5 is near center -->
+      </div>
+      <div class="led-separator"></div>
+      <div class="led-group" id="rightGroup">
+        <!-- LED 6-10 filled by JS -->
+      </div>
+    </div>
+    <div class="status-bar" id="statusBar"></div>
+    <div style="margin-top:14px;">
+      <div class="brightness-row">
+        <span class="brightness-label">LDD PWM</span>
+        <div class="brightness-track"><div class="brightness-fill" id="brightnessFill"></div></div>
+        <span class="brightness-pct" id="brightnessPct">100%</span>
+      </div>
+    </div>
+    <div class="startup-status" id="startupStatus" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- LEAN ANGLE CONTROL -->
+  <div class="panel">
+    <div class="panel-title">Lean Angle Input</div>
+    <div class="lean-control">
+      <div class="lean-display">
+        <div class="lean-value" id="leanValue">0.0</div>
+        <div class="lean-unit">°</div>
+        <div class="lean-direction" id="leanDir">—</div>
+      </div>
+
+      <div class="bike-container">
+        <svg class="bike-svg" id="bikeSvg" width="80" height="100" viewBox="0 0 80 100">
+          <!-- Simple motorcycle silhouette -->
+          <ellipse cx="40" cy="50" rx="6" ry="30" fill="none" stroke="#4a5568" stroke-width="3" rx2="3"/>
+          <ellipse cx="40" cy="50" rx="3" ry="3" fill="var(--accent)"/>
+          <line x1="40" y1="20" x2="40" y2="80" stroke="#2a3040" stroke-width="2"/>
+          <line x1="28" y1="45" x2="52" y2="55" stroke="#4a5568" stroke-width="2"/>
+          <circle cx="40" cy="20" r="4" fill="none" stroke="#4a5568" stroke-width="2"/>
+          <circle cx="40" cy="80" r="5" fill="none" stroke="#4a5568" stroke-width="2"/>
+        </svg>
+      </div>
+
+      <div class="slider-row">
+        <span class="slider-label" style="color:var(--accent)">LEFT</span>
+        <input type="range" id="leanSlider" min="-50" max="50" step="0.5" value="0">
+        <span class="slider-label" style="color:var(--accent2)">RIGHT</span>
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+        <button onclick="setLean(0)">Reset Center</button>
+        <button onclick="runStartup()" id="startupBtn">⚡ Startup Sequence</button>
+        <button onclick="runDemo()">▶ Run Demo</button>
+        <button onclick="clearTimeline()">Clear Timeline</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TIMELINE -->
+  <div class="panel">
+    <div class="panel-title">LED State Timeline</div>
+    <div class="timeline-wrap">
+      <canvas id="timeline"></canvas>
+    </div>
+    <div class="timeline-legend" id="timelineLegend"></div>
+  </div>
+
+  <!-- CONFIG -->
+  <div class="panel">
+    <div class="panel-title">Configuration — mirrors firmware defaults</div>
+    <div class="config-grid">
+      <div class="config-item">
+        <label>Threshold 1 — LED 5/6 (°)</label>
+        <input type="number" id="t0" value="5" step="0.5" min="0" max="90" onchange="updateConfig()">
+      </div>
+      <div class="config-item">
+        <label>Threshold 2 — LED 4/7 (°)</label>
+        <input type="number" id="t1" value="10" step="0.5" min="0" max="90" onchange="updateConfig()">
+      </div>
+      <div class="config-item">
+        <label>Threshold 3 — LED 3/8 (°)</label>
+        <input type="number" id="t2" value="20" step="0.5" min="0" max="90" onchange="updateConfig()">
+      </div>
+      <div class="config-item">
+        <label>Threshold 4 — LED 2/9 (°)</label>
+        <input type="number" id="t3" value="30" step="0.5" min="0" max="90" onchange="updateConfig()">
+      </div>
+      <div class="config-item">
+        <label>Threshold 5 — LED 1/10 (°)</label>
+        <input type="number" id="t4" value="40" step="0.5" min="0" max="90" onchange="updateConfig()">
+      </div>
+      <div class="config-item">
+        <label>Hysteresis (°)</label>
+        <input type="number" id="hyst" value="3" step="0.5" min="0" max="20" onchange="updateConfig()">
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ============================================================================
+// CONFIG (mirrors firmware)
+// ============================================================================
+let cfg = {
+  thresholds: [5, 10, 20, 30, 40],
+  hysteresis: 3
+};
+
+function updateConfig() {
+  cfg.thresholds = [
+    parseFloat(document.getElementById('t0').value),
+    parseFloat(document.getElementById('t1').value),
+    parseFloat(document.getElementById('t2').value),
+    parseFloat(document.getElementById('t3').value),
+    parseFloat(document.getElementById('t4').value),
+  ];
+  cfg.hysteresis = parseFloat(document.getElementById('hyst').value);
+  recompute();
+}
+
+// ============================================================================
+// LED STATE (exact port of firmware computeLEDStates)
+// ============================================================================
+let wasLeft  = false;
+let wasRight = false;
+// Per-threshold hysteresis state for each side
+let leftThreshActive  = [false, false, false, false, false];
+let rightThreshActive = [false, false, false, false, false];
+let ledState = new Array(10).fill(false);
+let newState = new Array(10).fill(false);
+
+const LEFT_ORDER  = [4, 3, 2, 1, 0];
+const RIGHT_ORDER = [5, 6, 7, 8, 9];
+
+function computeLEDStates(leanAngle) {
+  newState = new Array(10).fill(false);
+
+  const onAngle  = cfg.thresholds[0];
+  const offAngle = onAngle - cfg.hysteresis;
+
+  // Determine overall direction using threshold[0] hysteresis
+  if (leanAngle >= onAngle) {
+    wasLeft  = true;
+    wasRight = false;
+  } else if (leanAngle <= -onAngle) {
+    wasRight = true;
+    wasLeft  = false;
+  } else if (leanAngle > -offAngle && leanAngle < offAngle) {
+    wasLeft  = false;
+    wasRight = false;
+  } else if (leanAngle >= offAngle && leanAngle < onAngle) {
+    wasRight = false;
+  } else if (leanAngle <= -offAngle && leanAngle > -onAngle) {
+    wasLeft  = false;
+  }
+
+  // Clear per-threshold states when direction turns off
+  if (!wasLeft)  leftThreshActive  = [false, false, false, false, false];
+  if (!wasRight) rightThreshActive = [false, false, false, false, false];
+
+  // Per-threshold hysteresis: each threshold independently on/off
+  if (wasLeft || wasRight) {
+    const absAngle = Math.abs(leanAngle);
+    const threshActive = wasLeft ? leftThreshActive : rightThreshActive;
+    for (let i = 0; i < 5; i++) {
+      const on  = cfg.thresholds[i];
+      const off = on - cfg.hysteresis;
+      if (absAngle >= on) threshActive[i] = true;
+      if (absAngle < off) threshActive[i] = false;
+      // Between off and on: hold previous state
+    }
+  }
+
+  // Compute active LED window from contiguous threshold states
+  const activateFromThresh = (threshActive, order) => {
+    let exceeded = 0;
+    for (let i = 0; i < 5; i++) {
+      if (threshActive[i]) exceeded = i + 1;
+      else break;
+    }
+    if (exceeded === 0) return;
+    const startIdx = exceeded > 3 ? exceeded - 3 : 0;
+    const endIdx   = exceeded - 1;
+    for (let i = startIdx; i <= endIdx; i++) newState[order[i]] = true;
+  };
+
+  if (wasLeft)  activateFromThresh(leftThreshActive,  LEFT_ORDER);
+  if (wasRight) activateFromThresh(rightThreshActive, RIGHT_ORDER);
+
+  return newState;
+}
+
+// ============================================================================
+// DOM: BUILD LED ELEMENTS
+// ============================================================================
+const LED_COLORS = [
+  '#ff6b00','#ff8c33','#ffaa66','#ffcc99','#ffe0cc', // left 1-5
+  '#ccf0ff','#99e0ff','#66ccff','#33b8ff','#00a0ff'  // right 6-10
+];
+
+function buildLEDs() {
+  const lg = document.getElementById('leftGroup');
+  const rg = document.getElementById('rightGroup');
+
+  // Left: render LED1 nearest center (index 0 first, then 1,2,3,4)
+  [0,1,2,3,4].forEach(idx => {
+    const cell = document.createElement('div');
+    cell.className = 'led-cell';
+    cell.innerHTML = `
+      <div class="led-num">${idx+1}</div>
+      <div class="led" id="led${idx}" style="--glow:${LED_COLORS[idx]}33"></div>
+      <div class="led-label">L${idx+1}</div>`;
+    lg.appendChild(cell);
+  });
+
+  // Right: LED6 near center (index 5 first, then 6,7,8,9)
+  [5,6,7,8,9].forEach(idx => {
+    const cell = document.createElement('div');
+    cell.className = 'led-cell';
+    cell.innerHTML = `
+      <div class="led-num">${idx+1}</div>
+      <div class="led" id="led${idx}" style="--glow:${LED_COLORS[idx]}33"></div>
+      <div class="led-label">R${idx-4}</div>`;
+    rg.appendChild(cell);
+  });
+
+  // Legend
+  const legend = document.getElementById('timelineLegend');
+  for (let i = 0; i < 10; i++) {
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.innerHTML = `<div class="legend-dot" style="background:${LED_COLORS[i]}"></div>LED ${i+1}`;
+    legend.appendChild(item);
+  }
+}
+
+// ============================================================================
+// RENDER LEDs
+// ============================================================================
+let prevState = new Array(10).fill(false);
+
+function renderLEDs(newState) {
+  for (let i = 0; i < 10; i++) {
+    const el = document.getElementById('led' + i);
+    if (!el) continue;
+    const wasOn = prevState[i];
+    const isOn  = newState[i];
+    el.classList.toggle('on', isOn);
+    if (isOn) {
+      el.style.opacity = 0.2 + 0.8 * (currentBrightness / 255);
+    } else {
+      el.style.opacity = '';
+    }
+    if (isOn !== wasOn) {
+      el.classList.remove('just-changed');
+      void el.offsetWidth; // reflow
+      el.classList.add('just-changed');
+    }
+  }
+  prevState = [...newState];
+
+  // Status chips
+  const bar = document.getElementById('statusBar');
+  bar.innerHTML = '';
+  const activeCount = newState.filter(Boolean).length;
+  const chip = (txt, cls) => {
+    const c = document.createElement('div');
+    c.className = 'status-chip ' + cls;
+    c.textContent = txt;
+    bar.appendChild(c);
+  };
+  chip(`${activeCount} LED${activeCount !== 1 ? 's' : ''} active`, activeCount > 0 ? 'active' : '');
+  if (wasLeft)  chip('LEFT TURN', 'left-active');
+  if (wasRight) chip('RIGHT TURN', 'right-active');
+  if (!wasLeft && !wasRight) chip('STRAIGHT / DEADBAND', '');
+}
+
+// ============================================================================
+// LEAN DISPLAY
+// ============================================================================
+function updateLeanDisplay(angle) {
+  const valEl  = document.getElementById('leanValue');
+  const dirEl  = document.getElementById('leanDir');
+  const bikeEl = document.getElementById('bikeSvg');
+
+  valEl.textContent = Math.abs(angle).toFixed(1);
+  valEl.className = 'lean-value' + (angle > 0.5 ? ' left' : angle < -0.5 ? ' right' : '');
+
+  if (angle > 0.5)       { dirEl.textContent = 'LEFT';  dirEl.className = 'lean-direction left'; }
+  else if (angle < -0.5) { dirEl.textContent = 'RIGHT'; dirEl.className = 'lean-direction right'; }
+  else                   { dirEl.textContent = '—';     dirEl.className = 'lean-direction'; }
+
+  // Bike tilt - lean left = positive angle = tilt left (negative rotation in CSS)
+  bikeEl.style.transform = `rotate(${-angle * 0.6}deg)`;
+}
+
+// ============================================================================
+// TIMELINE CANVAS
+// ============================================================================
+const HISTORY_MS = 12000;
+let history = []; // [{t, leds[10], angle}]
+let startTime = Date.now();
+
+function recordState(angle, leds) {
+  const t = Date.now() - startTime;
+  history.push({ t, leds: [...leds], angle });
+  // Keep only last HISTORY_MS
+  const cutoff = t - HISTORY_MS;
+  while (history.length > 1 && history[0].t < cutoff) history.shift();
+}
+
+function drawTimeline() {
+  const canvas = document.getElementById('timeline');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width  = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = rect.width;
+  const H = rect.height;
+
+  ctx.fillStyle = '#0a0c10';
+  ctx.fillRect(0, 0, W, H);
+
+  if (history.length < 2) return;
+
+  const now   = history[history.length - 1].t;
+  const tMin  = now - HISTORY_MS;
+  const tMax  = now;
+
+  const toX = t => ((t - tMin) / (tMax - tMin)) * W;
+
+  // Grid lines
+  ctx.strokeStyle = '#1e2530';
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 5; i++) {
+    const x = (i / 5) * W;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+
+  // Lean angle curve (bottom 20% of canvas)
+  const angleH = H * 0.18;
+  const angleY = H - angleH * 0.5;
+  ctx.strokeStyle = '#2a3040';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, angleY);
+  ctx.lineTo(W, angleY);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#ffffff30';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  history.forEach((pt, i) => {
+    const x = toX(pt.t);
+    const y = angleY - (pt.angle / 50) * angleH;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // LED rows
+  const ledAreaH = H - angleH - 8;
+  const rowH = ledAreaH / 10;
+
+  for (let led = 0; led < 10; led++) {
+    const rowY = led * rowH;
+    const color = LED_COLORS[led];
+
+    // Row label
+    ctx.fillStyle = '#2a3040';
+    ctx.font = `${Math.floor(dpr * 8)}px Share Tech Mono`;
+    ctx.fillText(`L${led+1}`, 3, rowY + rowH * 0.7);
+
+    // Filled blocks where LED is on
+    let segStart = null;
+    for (let i = 0; i < history.length; i++) {
+      const pt = history[i];
+      const isOn = pt.leds[led];
+      if (isOn && segStart === null) segStart = pt.t;
+      if (!isOn && segStart !== null) {
+        const x1 = toX(segStart);
+        const x2 = toX(pt.t);
+        ctx.fillStyle = color + 'cc';
+        ctx.fillRect(x1, rowY + 2, Math.max(x2 - x1, 2), rowH - 4);
+        segStart = null;
+      }
+    }
+    // Close open segment
+    if (segStart !== null) {
+      const x1 = toX(segStart);
+      const x2 = W;
+      ctx.fillStyle = color + 'cc';
+      ctx.fillRect(x1, rowY + 2, Math.max(x2 - x1, 2), rowH - 4);
+    }
+  }
+
+  // Time labels
+  ctx.fillStyle = '#2a3040';
+  ctx.font = '9px Share Tech Mono';
+  for (let i = 1; i < 5; i++) {
+    const t = tMin + (i / 5) * HISTORY_MS;
+    const label = ((t - (Date.now() - startTime - HISTORY_MS)) / 1000).toFixed(0) + 's';
+    ctx.fillText(label, (i / 5) * W + 2, H - 2);
+  }
+}
+
+function clearTimeline() {
+  history = [];
+  startTime = Date.now();
+}
+
+// ============================================================================
+// MAIN RECOMPUTE
+// ============================================================================
+let currentAngle = 0;
+
+function recompute() {
+  const newState = computeLEDStates(currentAngle);
+  ledState = newState;
+  renderLEDs(newState);
+  updateLeanDisplay(currentAngle);
+  recordState(currentAngle, newState);
+}
+
+function setLean(angle) {
+  currentAngle = angle;
+  document.getElementById('leanSlider').value = angle;
+  recompute();
+}
+
+// ============================================================================
+// SLIDER INPUT
+// ============================================================================
+document.getElementById('leanSlider').addEventListener('input', function() {
+  currentAngle = parseFloat(this.value);
+  recompute();
+});
+
+// ============================================================================
+// DEMO SEQUENCE
+// ============================================================================
+let demoRunning = false;
+
+async function runDemo() {
+  if (demoRunning) return;
+  demoRunning = true;
+  clearTimeline();
+  wasLeft = false; wasRight = false;
+
+  const steps = [
+    // [angle, duration_ms]
+    // Ramp up through all 5 thresholds (5,10,20,30,40)
+    [0,    800],
+    [6,    400], [12, 400], [22, 400], [32, 400], [42, 600],
+    // Ramp back down - must drop below (threshold - hysteresis) to turn off
+    // thresh[0]=5, hyst=3 → off below 2°; go to 1° to ensure all off
+    [32,   400], [22, 400], [12, 400], [6,  400], [1,  600],
+    // Cross zero cleanly
+    [0,    500],
+    // Mirror for right side
+    [-6,   400], [-12,400], [-22,400], [-32,400], [-42,600],
+    [-32,  400], [-22,400], [-12,400], [-6, 400], [-1, 600],
+    [0,    800],
+  ];
+
+  for (const [targetAngle, dur] of steps) {
+    const startA = currentAngle;
+    const endA   = targetAngle;
+    const t0     = performance.now();
+    await new Promise(resolve => {
+      function step() {
+        const elapsed = performance.now() - t0;
+        const progress = Math.min(elapsed / dur, 1);
+        const eased = progress < 0.5
+          ? 2 * progress * progress
+          : -1 + (4 - 2 * progress) * progress;
+        setLean(startA + (endA - startA) * eased);
+        if (progress < 1) requestAnimationFrame(step);
+        else resolve();
+      }
+      requestAnimationFrame(step);
+    });
+  }
+  demoRunning = false;
+}
+
+// ============================================================================
+// BRIGHTNESS CONTROL (LDD PWM visualization)
+// ============================================================================
+let currentBrightness = 255; // 0-255 matching firmware
+
+function setBrightness(pwm) {
+  currentBrightness = Math.max(0, Math.min(255, pwm));
+  const pct = Math.round((currentBrightness / 255) * 100);
+  document.getElementById('brightnessFill').style.width = pct + '%';
+  document.getElementById('brightnessPct').textContent = pct + '%';
+  // Visually dim the LEDs by adjusting their opacity
+  document.querySelectorAll('.led.on').forEach(el => {
+    el.style.opacity = 0.2 + 0.8 * (currentBrightness / 255);
+  });
+}
+
+function setStartupStatus(msg) {
+  document.getElementById('startupStatus').textContent = msg;
+}
+
+// ============================================================================
+// STARTUP SEQUENCE (mirrors firmware startupSequence())
+// ============================================================================
+let startupRunning = false;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function animateBrightness(fromPwm, toPwm, durationMs) {
+  const steps = Math.abs(toPwm - fromPwm);
+  if (steps === 0) return;
+  const delayPerStep = durationMs / steps;
+  const dir = toPwm > fromPwm ? 1 : -1;
+  for (let pwm = fromPwm; pwm !== toPwm; pwm += dir) {
+    setBrightness(pwm);
+    await sleep(Math.max(delayPerStep, 4));
+  }
+  setBrightness(toPwm);
+}
+
+async function runStartup() {
+  if (startupRunning || demoRunning) return;
+  startupRunning = true;
+  clearTimeline();
+  wasLeft = false; wasRight = false;
+
+  // Disable controls during startup
+  document.getElementById('startupBtn').disabled = true;
+  document.getElementById('leanSlider').disabled = true;
+
+  // All LEDs off, angle at 0
+  const allOff = new Array(10).fill(false);
+  setLean(0);
+  renderLEDs(allOff);
+  setBrightness(0);
+
+  // -- Phase 1: Ramp LDD from 0 to 20% (51/255) over ~500ms
+  setStartupStatus('INITIALIZING...');
+  await sleep(300);
+  setStartupStatus('RAMPING LDD → 20%');
+  await animateBrightness(0, 51, 500);
+
+  // -- Phase 2: Sweep outward — turn on pairs 5/6, 4/7, 3/8, 2/9, 1/10
+  setStartupStatus('SWEEP OUTWARD');
+  const leftOrder  = [4, 3, 2, 1, 0];
+  const rightOrder = [5, 6, 7, 8, 9];
+  let sweepState = new Array(10).fill(false);
+
+  for (let i = 0; i < 5; i++) {
+    sweepState[leftOrder[i]]  = true;
+    sweepState[rightOrder[i]] = true;
+    renderLEDs([...sweepState]);
+    recordState(0, sweepState);
+    await sleep(120);
+  }
+
+  // Brief pause with all on
+  await sleep(300);
+
+  // -- Phase 3: Sweep inward — turn off pairs 5/6 first, then outward
+  setStartupStatus('SWEEP INWARD');
+  for (let i = 0; i < 5; i++) {
+    sweepState[leftOrder[i]]  = false;
+    sweepState[rightOrder[i]] = false;
+    renderLEDs([...sweepState]);
+    recordState(0, sweepState);
+    await sleep(120);
+  }
+
+  // -- Phase 4: Pause 2 seconds with LEDs off
+  setStartupStatus('READY IN 2s...');
+  await sleep(2000);
+
+  // -- Phase 5: Ramp LDD back to full (255) over ~800ms
+  setStartupStatus('RAMPING LDD → 100%');
+  await animateBrightness(51, 255, 800);
+
+  // -- Done
+  setStartupStatus('NORMAL OPERATION');
+  await sleep(600);
+  setStartupStatus('');
+
+  document.getElementById('startupBtn').disabled = false;
+  document.getElementById('leanSlider').disabled = false;
+  startupRunning = false;
+}
+
+// ============================================================================
+// ANIMATION LOOP
+// ============================================================================
+function animLoop() {
+  drawTimeline();
+  requestAnimationFrame(animLoop);
+}
+
+// ============================================================================
+// INIT
+// ============================================================================
+buildLEDs();
+setBrightness(255);
+recompute();
+animLoop();
+
+// Auto-run startup sequence on page load
+runStartup();
+
+// Resize canvas on window resize
+window.addEventListener('resize', () => {
+  const canvas = document.getElementById('timeline');
+  canvas.style.width  = '100%';
+  canvas.style.height = '180px';
+});
+</script>
+</body>
+</html>
