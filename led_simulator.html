@@ -1044,31 +1044,24 @@ async function runStartup() {
   setStartupStatus('RAMPING LDD → 20%');
   await animateBrightness(0, 51, 500);
 
-  // -- Phase 2: Sweep outward — turn on pairs 5/6, 4/7, 3/8, 2/9, 1/10
+  // -- Phase 2: Sweep outward — flash each pair on then off before moving to next
   setStartupStatus('SWEEP OUTWARD');
   const leftOrder  = [4, 3, 2, 1, 0];
   const rightOrder = [5, 6, 7, 8, 9];
-  let sweepState = new Array(10).fill(false);
+  const allOff2 = new Array(10).fill(false);
 
   for (let i = 0; i < 5; i++) {
-    sweepState[leftOrder[i]]  = true;
-    sweepState[rightOrder[i]] = true;
-    renderLEDs([...sweepState]);
-    recordState(0, sweepState);
-    await sleep(120);
-  }
-
-  // Brief pause with all on
-  await sleep(300);
-
-  // -- Phase 3: Sweep inward — turn off pairs 5/6 first, then outward
-  setStartupStatus('SWEEP INWARD');
-  for (let i = 0; i < 5; i++) {
-    sweepState[leftOrder[i]]  = false;
-    sweepState[rightOrder[i]] = false;
-    renderLEDs([...sweepState]);
-    recordState(0, sweepState);
-    await sleep(120);
+    // Turn on this pair only
+    const pairState = new Array(10).fill(false);
+    pairState[leftOrder[i]]  = true;
+    pairState[rightOrder[i]] = true;
+    renderLEDs(pairState);
+    recordState(0, pairState);
+    await sleep(200);
+    // Turn off before next pair
+    renderLEDs([...allOff2]);
+    recordState(0, allOff2);
+    await sleep(80);
   }
 
   // -- Phase 4: Pause 2 seconds with LEDs off

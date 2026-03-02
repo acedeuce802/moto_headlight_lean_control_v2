@@ -187,7 +187,7 @@ Default max current: **1.32A** (1.2A rated + 10% margin)
 
 ## Web Interface
 
-**AP Mode (default):** Connect to `Cornering-Lights-V2` WiFi, navigate to `http://192.168.5.1`
+**AP Mode (default):** Connect to `Cornering-Lights-V2` WiFi, navigate to `http://192.168.6.1`
 **Station Mode:** Configure SSID/password, then access via `http://cornering-lights-v2.local`
 
 | Page | URL | Description |
@@ -247,7 +247,7 @@ Built-in (ESP32 Arduino core):
 | LDD off temp | 85°C |
 | Max current | 1.32A |
 | AP password | cornering123 |
-| AP IP | 192.168.5.1 |
+| AP IP | 192.168.6.1 |
 | Pulses per rev | 4 |
 | Wheel circumference | 1.95m |
 | IMU yaw axis | Z (index 2) |

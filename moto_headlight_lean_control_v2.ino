@@ -48,7 +48,7 @@
  * - Fan ramps from 0% to 100% between configurable temps
  * - LDD PWM dims from 100% to 0% between configurable temps
  *
- * Web Server (AP mode, IP: 192.168.5.1):
+ * Web Server (AP mode, IP: 192.168.6.1):
  * - Dashboard: live diagnostics
  * - Calibration: lean thresholds, hysteresis, sensor offsets
  * - Thermal: fan and dimming temperature setpoints
@@ -63,6 +63,7 @@
 #include <ArduinoOTA.h>
 #include <Update.h>
 #include <Preferences.h>
+#define ONEWIRE_USE_ARDUINO_API 1
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
@@ -285,6 +286,10 @@ struct SystemState {
   bool systemInitialized;
   bool mcpInitialized;
   bool ina219Initialized;
+
+  // Test mode
+  bool testMode;            // When true, software control is suspended
+  int  testLedIndex;        // 0-9: which LED is lit in test mode (-1 = none)
 };
 
 SystemState state = {};
@@ -772,8 +777,8 @@ void updateThermal() {
     state.fanPwm = 255;
     state.lddPwm = 255;
   }
-  ledcWrite(FAN_PWM_CHANNEL, state.fanPwm);
-  ledcWrite(LDD_PWM_CHANNEL, state.lddPwm);
+  ledcWrite(FAN_PWM_PIN, state.fanPwm);
+  ledcWrite(LDD_PWM_PIN, state.lddPwm);
 }
 
 // ============================================================================
@@ -786,7 +791,7 @@ void updateCurrent() {
   if (state.current > config.maxCurrent) {
     float overcurrentRatio = config.maxCurrent / state.current;
     uint8_t currentPwm = (uint8_t)(state.lddPwm * overcurrentRatio);
-    ledcWrite(LDD_PWM_CHANNEL, currentPwm);
+    ledcWrite(LDD_PWM_PIN, currentPwm);
   }
 }
 
@@ -796,10 +801,10 @@ void updateCurrent() {
 
 void startupSequence() {
   // Ramp LDD PWM up to 20%
-  ledcWrite(LDD_PWM_CHANNEL, 0);
+  ledcWrite(LDD_PWM_PIN, 0);
   delay(100);
   for (int pwm = 0; pwm <= 51; pwm++) {
-    ledcWrite(LDD_PWM_CHANNEL, pwm);
+    ledcWrite(LDD_PWM_PIN, pwm);
     delay(10);
   }
 
@@ -807,28 +812,25 @@ void startupSequence() {
   int leftOrder[5]  = {4, 3, 2, 1, 0};
   int rightOrder[5] = {5, 6, 7, 8, 9};
 
-  // Sweep outward - turn on pairs sequentially
+  // Sweep outward - flash each pair on then off before moving to next
   for (int i = 0; i < 5; i++) {
+    // Turn on this pair only
+    for (int j = 0; j < 10; j++) state.ledState[j] = false;
     state.ledState[leftOrder[i]]  = true;
     state.ledState[rightOrder[i]] = true;
     applyLEDStates();
-    delay(120);
-  }
-
-  delay(300);
-
-  // Sweep inward - turn off pairs sequentially (5/6 first, then outward)
-  for (int i = 0; i < 5; i++) {
+    delay(200);
+    // Turn off before next pair
     state.ledState[leftOrder[i]]  = false;
     state.ledState[rightOrder[i]] = false;
     applyLEDStates();
-    delay(120);
+    delay(80);
   }
 
   // Pause with LEDs off, then ramp LDD back to full brightness
   delay(2000);
   for (int pwm = 51; pwm <= 255; pwm++) {
-    ledcWrite(LDD_PWM_CHANNEL, pwm);
+    ledcWrite(LDD_PWM_PIN, pwm);
     delay(4);
   }
 
@@ -952,8 +954,8 @@ void resetConfig() {
 void setupWiFi() {
   if (config.useAPMode || strlen(config.wifiSSID) == 0) {
     WiFi.mode(WIFI_AP);
-    IPAddress local_IP(192, 168, 5, 1);
-    IPAddress gateway(192, 168, 5, 1);
+    IPAddress local_IP(192, 168, 6, 1);
+    IPAddress gateway(192, 168, 6, 1);
     IPAddress subnet(255, 255, 255, 0);
     WiFi.softAPConfig(local_IP, gateway, subnet);
     WiFi.softAP(config.deviceName, config.apPassword);
@@ -971,8 +973,8 @@ void setupWiFi() {
       Serial.println("\nWiFi failed, falling back to AP");
       config.useAPMode = true;
       WiFi.mode(WIFI_AP);
-      IPAddress local_IP(192, 168, 5, 1);
-      IPAddress gateway(192, 168, 5, 1);
+      IPAddress local_IP(192, 168, 6, 1);
+      IPAddress gateway(192, 168, 6, 1);
       IPAddress subnet(255, 255, 255, 0);
       WiFi.softAPConfig(local_IP, gateway, subnet);
       WiFi.softAP(config.deviceName, config.apPassword);
@@ -988,46 +990,55 @@ void setupWiFi() {
 // ============================================================================
 
 String htmlHeader(const String& title) {
-  String h = "<!DOCTYPE html><html><head>";
+  String h = "<!DOCTYPE html><html lang='en'><head>";
   h += "<meta charset='UTF-8'>";
   h += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
-  h += "<title>" + title + " - " + String(config.deviceName) + "</title>";
+  h += "<title>" + title + " | " + String(config.deviceName) + "</title>";
   h += "<style>";
-  h += "body{font-family:Arial,sans-serif;margin:0;background:#1a1a2e;color:#eee;}";
-  h += ".wrap{max-width:900px;margin:0 auto;padding:20px;}";
-  h += "h1{color:#e94560;margin-bottom:5px;}";
-  h += "h2{color:#0f3460;background:#e94560;padding:8px 12px;border-radius:5px;font-size:15px;margin-top:25px;}";
-  h += "nav{margin:15px 0;}nav a{color:#e94560;text-decoration:none;margin-right:18px;font-weight:bold;}";
-  h += "nav a:hover{text-decoration:underline;}";
-  h += ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:15px 0;}";
-  h += ".card{background:#16213e;padding:14px;border-radius:8px;border-left:4px solid #0f3460;}";
-  h += ".card.on{border-left-color:#4CAF50;background:#1a2e1a;}";
-  h += ".card.warn{border-left-color:#FFC107;background:#2e2a1a;}";
-  h += ".card.err{border-left-color:#f44336;background:#2e1a1a;}";
-  h += ".card h3{margin:0 0 8px;font-size:12px;color:#aaa;text-transform:uppercase;}";
-  h += ".card .val{font-size:26px;font-weight:bold;color:#fff;}";
-  h += ".card .unit{font-size:12px;color:#888;}";
-  h += ".led-row{display:flex;gap:6px;margin:12px 0;flex-wrap:wrap;}";
-  h += ".led{width:40px;height:40px;border-radius:50%;background:#333;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;color:#aaa;border:2px solid #444;}";
-  h += ".led.on{background:#ffcc00;color:#333;border-color:#ffaa00;box-shadow:0 0 10px #ffcc0088;}";
-  h += "label{display:block;margin:12px 0 4px;font-size:13px;color:#ccc;}";
-  h += "input[type=number],input[type=text],input[type=password]{width:100%;padding:8px;background:#16213e;border:1px solid #0f3460;border-radius:4px;color:#fff;box-sizing:border-box;}";
-  h += "button{background:#e94560;color:#fff;border:none;padding:10px 22px;border-radius:5px;cursor:pointer;margin:5px 5px 0 0;font-size:14px;}";
-  h += "button:hover{background:#c73652;}";
-  h += "button.sec{background:#0f3460;}button.sec:hover{background:#1a4a8a;}";
-  h += "button.danger{background:#7a1a1a;}button.danger:hover{background:#a02020;}";
-  h += ".info{background:#0f3460;padding:12px;border-radius:5px;margin:12px 0;font-size:13px;}";
+  h += "*{margin:0;padding:0;box-sizing:border-box;}";
+  h += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#1a1a1a;color:#e0e0e0;line-height:1.6;}";
+  h += "nav{background:#0a0a0a;padding:16px 0;box-shadow:0 2px 10px rgba(0,0,0,0.5);position:sticky;top:0;z-index:1000;}";
+  h += ".nav-inner{max-width:960px;margin:0 auto;padding:0 20px;display:flex;align-items:center;justify-content:space-between;}";
+  h += ".nav-title{color:#fff;font-size:1em;font-weight:400;letter-spacing:2px;text-transform:uppercase;}";
+  h += ".nav-links{display:flex;gap:24px;list-style:none;}";
+  h += ".nav-links a{color:#999;text-decoration:none;font-size:0.9em;font-weight:500;letter-spacing:1px;text-transform:uppercase;transition:color 0.2s;}";
+  h += ".nav-links a:hover{color:#fff;}";
+  h += ".nav-links a.active{color:#fff;}";
+  h += ".wrap{max-width:960px;margin:0 auto;padding:30px 20px;}";
+  h += "h2{font-size:0.75em;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#666;margin:32px 0 14px;padding-bottom:8px;border-bottom:1px solid #2a2a2a;}";
+  h += ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:8px;}";
+  h += ".card{background:#111;border:1px solid #222;padding:16px;border-radius:4px;}";
+  h += ".card h3{font-size:0.7em;font-weight:500;letter-spacing:1.5px;text-transform:uppercase;color:#555;margin-bottom:8px;}";
+  h += ".card .val{font-size:1.8em;font-weight:300;color:#e0e0e0;}";
+  h += ".card .unit{font-size:0.75em;color:#444;margin-top:2px;}";
+  h += ".card.active{border-color:#444;}";
+  h += ".card.warn{border-color:#666;}";
+  h += ".card.alert{border-color:#888;}";
+  h += ".led-row{display:flex;gap:8px;margin:16px 0;flex-wrap:wrap;}";
+  h += ".led{width:44px;height:44px;border-radius:50%;background:#111;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:#444;}";
+  h += ".led.on{background:#e0e0e0;color:#111;border-color:#e0e0e0;box-shadow:0 0 12px rgba(255,255,255,0.15);}";
+  h += "label{display:block;margin:16px 0 6px;font-size:0.75em;font-weight:500;letter-spacing:1px;text-transform:uppercase;color:#666;}";
+  h += "input[type=number],input[type=text],input[type=password]{width:100%;padding:10px 12px;background:#111;border:1px solid #2a2a2a;border-radius:4px;color:#e0e0e0;font-size:0.95em;box-sizing:border-box;transition:border-color 0.2s;}";
+  h += "input:focus{outline:none;border-color:#555;}";
+  h += "button{background:#e0e0e0;color:#111;border:none;padding:10px 24px;border-radius:4px;cursor:pointer;font-size:0.85em;font-weight:600;letter-spacing:1px;text-transform:uppercase;margin:6px 6px 0 0;transition:background 0.2s;}";
+  h += "button:hover{background:#fff;}";
+  h += "button.sec{background:transparent;color:#666;border:1px solid #333;}button.sec:hover{border-color:#666;color:#e0e0e0;}";
+  h += "button.danger{background:transparent;color:#666;border:1px solid #333;}button.danger:hover{border-color:#888;color:#e0e0e0;}";
+  h += ".info{background:#111;border:1px solid #222;border-left:2px solid #444;padding:12px 16px;border-radius:4px;margin:12px 0;font-size:0.85em;color:#777;}";
   h += ".row2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}";
-  h += "@media(max-width:500px){.row2{grid-template-columns:1fr;}}";
-  h += "</style></head><body><div class='wrap'>";
-  h += "<h1>🏍️ " + String(config.deviceName) + "</h1>";
-  h += "<nav>";
-  h += "<a href='/'>Dashboard</a>";
-  h += "<a href='/calibrate'>Calibration</a>";
-  h += "<a href='/thermal'>Thermal</a>";
-  h += "<a href='/config'>Config</a>";
-  h += "<a href='/update'>OTA</a>";
-  h += "</nav>";
+  h += "@media(max-width:600px){.row2{grid-template-columns:1fr;}.nav-title{display:none;}}";
+  h += "</style></head><body>";
+  h += "<nav><div class='nav-inner'>";
+  h += "<span class='nav-title'>" + String(config.deviceName) + "</span>";
+  h += "<ul class='nav-links'>";
+  h += "<li><a href='/'>Dashboard</a></li>";
+  h += "<li><a href='/calibrate'>Calibration</a></li>";
+  h += "<li><a href='/thermal'>Thermal</a></li>";
+  h += "<li><a href='/config'>Config</a></li>";
+  h += "<li><a href='/update'>OTA</a></li>";
+  h += "<li><a href='/test'>" + String(state.testMode ? "&#9679; Test" : "Test") + "</a></li>";
+  h += "</ul></div></nav>";
+  h += "<div class='wrap'>";
   return h;
 }
 
@@ -1250,13 +1261,91 @@ void handleAPIConfig() {
   if (server.hasArg("apPassword"))   strncpy(config.apPassword,   server.arg("apPassword").c_str(),   sizeof(config.apPassword)-1);
   config.useAPMode = (strlen(config.wifiSSID) == 0);
   saveConfig();
-  server.send(200, "text/html", "<html><body style='background:#1a1a2e;color:#eee;font-family:Arial'><h2>Saved! Restarting...</h2><script>setTimeout(()=>window.location='/',6000)</script></body></html>");
+  server.send(200, "text/html", "<html><body style='background:#1a1a1a;color:#e0e0e0;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;'><div style='text-align:center;'><p style='font-size:0.8em;letter-spacing:2px;text-transform:uppercase;color:#666;'>Saved &mdash; Restarting</p></div><script>setTimeout(()=>window.location='/',6000)</script></body></html>");
   delay(1000);
   ESP.restart();
 }
 
 void handleAPIReset() {
   resetConfig(); // restarts inside
+}
+
+// ============================================================================
+// TEST MODE PAGE
+// ============================================================================
+
+void handleTest() {
+  String html = htmlHeader("Test Mode");
+
+  if (state.testMode) {
+    html += "<div style='background:#111;border:1px solid #444;border-left:2px solid #e0e0e0;padding:12px 16px;border-radius:4px;margin-bottom:24px;font-size:0.85em;color:#aaa;'>";
+    html += "Test mode active &mdash; software control suspended.";
+    html += "</div>";
+  } else {
+    html += "<div class='info'>Select an LED to illuminate individually. Software lean control will be suspended while in test mode.</div>";
+  }
+
+  // LED grid
+  html += "<h2>Select LED</h2>";
+  html += "<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:8px;max-width:400px;margin-bottom:24px;'>";
+  // LED buttons 1-10
+  for (int i = 1; i <= 10; i++) {
+    bool isActive = state.testMode && (state.testLedIndex == i - 1);
+    String btnStyle = isActive
+      ? "background:#e0e0e0;color:#111;border:1px solid #e0e0e0;"
+      : "background:#111;color:#666;border:1px solid #2a2a2a;";
+    html += "<a href='/api/test?led=" + String(i - 1) + "' style='";
+    html += btnStyle;
+    html += "display:flex;align-items:center;justify-content:center;height:52px;border-radius:4px;font-size:1.1em;font-weight:500;text-decoration:none;transition:background 0.2s;'>";
+    html += String(i);
+    html += "</a>";
+  }
+  html += "</div>";
+
+  // Control buttons
+  html += "<h2>Control</h2>";
+  if (!state.testMode) {
+    html += "<a href='/api/test?led=0' style='display:inline-block;background:#e0e0e0;color:#111;border:none;padding:10px 24px;border-radius:4px;font-size:0.85em;font-weight:600;letter-spacing:1px;text-transform:uppercase;text-decoration:none;margin-right:8px;'>Enter Test Mode</a>";
+  } else {
+    html += "<a href='/api/test?exit=1' style='display:inline-block;background:transparent;color:#e0e0e0;border:1px solid #555;padding:10px 24px;border-radius:4px;font-size:0.85em;font-weight:600;letter-spacing:1px;text-transform:uppercase;text-decoration:none;'>Return to Software Control</a>";
+  }
+
+  html += htmlFooter();
+  server.send(200, "text/html", html);
+}
+
+void handleAPITest() {
+  if (server.hasArg("exit")) {
+    // Exit test mode - restore software control
+    state.testMode = false;
+    state.testLedIndex = -1;
+    allLEDsOff();
+    Serial.println("Test mode: exited");
+    server.sendHeader("Location", "/test");
+    server.send(303);
+    return;
+  }
+
+  if (server.hasArg("led")) {
+    int ledIdx = server.arg("led").toInt();
+    if (ledIdx < 0 || ledIdx > 9) ledIdx = 0;
+
+    // Enter test mode if not already
+    if (!state.testMode) {
+      state.testMode = true;
+      Serial.println("Test mode: entered");
+    }
+
+    // Turn off all LEDs, then turn on selected one
+    for (int i = 0; i < 10; i++) state.ledState[i] = false;
+    state.ledState[ledIdx] = true;
+    state.testLedIndex = ledIdx;
+    applyLEDStates();
+    Serial.printf("Test mode: LED %d on\n", ledIdx + 1);
+  }
+
+  server.sendHeader("Location", "/test");
+  server.send(303);
 }
 
 // ============================================================================
@@ -1268,10 +1357,10 @@ void handleUpdate() {
   html += "<h2>Web Upload</h2>";
   html += "<p>Export .bin from Arduino IDE: Sketch → Export Compiled Binary</p>";
   html += "<form id='upForm' enctype='multipart/form-data'>";
-  html += "<input type='file' id='file' name='update' accept='.bin' style='width:100%;padding:10px;background:#16213e;color:#eee;border:1px solid #0f3460;border-radius:4px;margin-bottom:10px;'>";
+  html += "<input type='file' id='file' name='update' accept='.bin' style='width:100%;padding:10px;background:#111;color:#e0e0e0;border:1px solid #2a2a2a;border-radius:4px;margin-bottom:10px;'>";
   html += "<button type='submit'>Upload Firmware</button>";
   html += "</form>";
-  html += "<div id='prog' style='display:none;margin:15px 0;'><div style='background:#0f3460;border-radius:5px;overflow:hidden;'><div id='bar' style='height:28px;background:#e94560;width:0%;transition:width 0.3s;text-align:center;line-height:28px;color:#fff;'>0%</div></div></div>";
+  html += "<div id='prog' style='display:none;margin:16px 0;'><div style='background:#222;border-radius:4px;overflow:hidden;border:1px solid #2a2a2a;'><div id='bar' style='height:28px;background:#e0e0e0;width:0%;transition:width 0.3s;text-align:center;line-height:28px;color:#111;font-size:0.8em;font-weight:600;letter-spacing:1px;'>0%</div></div></div>";
   html += "<div id='msg' style='display:none;padding:12px;border-radius:5px;margin:15px 0;'></div>";
   html += "<script>";
   html += "document.getElementById('upForm').addEventListener('submit',function(e){";
@@ -1283,8 +1372,8 @@ void handleUpdate() {
   html += "document.getElementById('prog').style.display='block';";
   html += "document.getElementById('bar').style.width=p+'%';document.getElementById('bar').innerText=p+'%';}};";
   html += "x.onload=function(){var m=document.getElementById('msg');m.style.display='block';";
-  html += "if(x.status===200){m.style.background='#1a2e1a';m.innerHTML='<b>✓ Update successful!</b> Restarting...';setTimeout(()=>window.location='/',12000);}";
-  html += "else{m.style.background='#2e1a1a';m.innerHTML='<b>✗ Update failed:</b> '+x.responseText;}};";
+  html += "if(x.status===200){m.style.background='#111';m.style.border='1px solid #2a2a2a';m.style.borderLeft='2px solid #e0e0e0';m.style.color='#e0e0e0';m.style.padding='12px 16px';m.style.borderRadius='4px';m.innerHTML='Update complete &mdash; restarting';setTimeout(()=>window.location='/',12000);}";
+  html += "else{m.style.background='#111';m.style.border='1px solid #2a2a2a';m.style.borderLeft='2px solid #888';m.style.color='#999';m.style.padding='12px 16px';m.style.borderRadius='4px';m.innerHTML='Update failed: '+x.responseText;}};";
   html += "x.open('POST','/updateUpload',true);x.send(fd);});";
   html += "</script>";
   html += htmlFooter();
@@ -1331,6 +1420,8 @@ void setupWebServer() {
   server.on("/api/thermal",    handleAPIThermal);
   server.on("/api/config",     handleAPIConfig);
   server.on("/api/reset",      handleAPIReset);
+  server.on("/test",           handleTest);
+  server.on("/api/test",       handleAPITest);
   server.begin();
   Serial.println("Web server started");
 }
@@ -1369,13 +1460,11 @@ void setup() {
   pinMode(FAN_PWM_PIN, OUTPUT);
 
   // PWM channels
-  ledcSetup(LDD_PWM_CHANNEL, PWM_FREQ, PWM_RESOLUTION);
-  ledcAttachPin(LDD_PWM_PIN, LDD_PWM_CHANNEL);
-  ledcWrite(LDD_PWM_CHANNEL, 255);  // Full brightness initially
+  ledcAttach(LDD_PWM_PIN, PWM_FREQ, PWM_RESOLUTION);
+  ledcWrite(LDD_PWM_PIN, 255);  // Full brightness initially
 
-  ledcSetup(FAN_PWM_CHANNEL, PWM_FREQ, PWM_RESOLUTION);
-  ledcAttachPin(FAN_PWM_PIN, FAN_PWM_CHANNEL);
-  ledcWrite(FAN_PWM_CHANNEL, 0);    // Fan off initially
+  ledcAttach(FAN_PWM_PIN, PWM_FREQ, PWM_RESOLUTION);
+  ledcWrite(FAN_PWM_PIN, 0);    // Fan off initially
 
   // ADC
   analogReadResolution(12);
@@ -1437,18 +1526,19 @@ void loop() {
     updateIMULean();
   }
 
-  // Distance sensor read (every sample interval)
-  if (state.systemInitialized && (now - lastSampleTime >= config.sampleInterval)) {
-    lastSampleTime = now;
-    readSensors();  // updates leanAngleDist
-  }
+  // Distance sensor read and LED control - only when not in test mode
+  if (!state.testMode) {
+    if (state.systemInitialized && (now - lastSampleTime >= config.sampleInterval)) {
+      lastSampleTime = now;
+      readSensors();  // updates leanAngleDist
+    }
 
-  // Fuse lean angle sources and drive LEDs
-  if (now - lastSampleTime < config.sampleInterval * 2) {
-    updateLeanAngle();
-    computeLEDStates(state.leanAngle);
-    applyLEDStates();
-    updateVoltage();
+    if (now - lastSampleTime < config.sampleInterval * 2) {
+      updateLeanAngle();
+      computeLEDStates(state.leanAngle);
+      applyLEDStates();
+      state.voltage12v = readVoltage12v();
+    }
   }
 
   // Temperature + fan + LDD dim (every 2 seconds)
